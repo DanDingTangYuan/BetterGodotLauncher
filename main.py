@@ -100,7 +100,7 @@ class GodotManager:
         response = requests.get(api_url, timeout=5)
         response.raise_for_status()
         data = response.json()
-        self.latest_version = data["tag_name"]
+        self.latest_version = data["tag_name"]  # 例如 "4.3-stable"
         
         for asset in data.get("assets", []):
             name = asset["name"]
@@ -108,6 +108,22 @@ class GodotManager:
             if "win64" in name:
                 if "mono" in name: self.download_links["mono"] = url
                 else: self.download_links["standard"] = url
+
+    def has_version_locally(self, target_dir, version_tag):
+        """
+        掃描特定目錄，確認是否有檔案或資料夾名稱包含最新的版號（例如 "4.3-stable"）。
+        如果找到，代表最新版已存在，不需要重複下載。
+        """
+        if not os.path.exists(target_dir):
+            return False
+            
+        # 清除 tag 前面的 'v'（如果 API 回傳帶有 v 像是 v4.3-stable）
+        v_clean = version_tag.lstrip('v')
+        
+        for name in os.listdir(target_dir):
+            if v_clean in name:
+                return True
+        return False
 
     def download_and_extract(self, url, target_dir):
         import requests
@@ -122,21 +138,24 @@ class GodotManager:
         os.remove(zip_path)
 
     def launch_engine(self, target_dir):
-        executable = None
+        # 收集目錄下所有的執行檔路徑
+        exe_files = []
         for root_path, dirs, files in os.walk(target_dir):
             for file in files:
-                if file.endswith(".exe") and "Console" not in file:
-                    executable = os.path.join(root_path, file)
-                    break
-            if executable: break
+                if file.endswith(".exe"):
+                    exe_files.append(os.path.join(root_path, file))
 
-        if not executable:
-            for root_path, dirs, files in os.walk(target_dir):
-                for file in files:
-                    if file.endswith(".exe"):
-                        executable = os.path.join(root_path, file)
-                        break
-                if executable: break
+        if not exe_files:
+            return False
+
+        # 核心優化：優先排除 Console 版本的執行檔
+        valid_exes = [e for e in exe_files if "Console" not in os.path.basename(e)]
+        if not valid_exes:
+            valid_exes = exe_files
+
+        # 排序策略：依照路徑與檔名排序，確保最新版本（字母/數字排序最高者）排在最後面
+        valid_exes.sort()
+        executable = valid_exes[-1]
 
         if executable:
             subprocess.Popen([executable])
@@ -189,13 +208,16 @@ class LauncherGUI:
             self.root.after(0, lambda: self.update_status(f"{self.config.t('latest_v')}{self.manager.latest_version}\n{self.config.t('checking_local')}"))
             
             c = self.config
-            if not os.listdir(c.standard_dir) and self.manager.download_links["standard"]:
-                self.root.after(0, lambda: self.update_status(c.t("dl_std").format(self.manager.latest_version)))
-                self.manager.download_and_extract(self.manager.download_links["standard"], c.standard_dir)
+            m = self.manager
+            
+            # 關鍵邏輯變更：直接比對檔名中是否含有最新 tag_name
+            if not m.has_version_locally(c.standard_dir, m.latest_version) and m.download_links["standard"]:
+                self.root.after(0, lambda: self.update_status(c.t("dl_std").format(m.latest_version)))
+                m.download_and_extract(m.download_links["standard"], c.standard_dir)
 
-            if not os.listdir(c.mono_dir) and self.manager.download_links["mono"]:
-                self.root.after(0, lambda: self.update_status(c.t("dl_mono").format(self.manager.latest_version)))
-                self.manager.download_and_extract(self.manager.download_links["mono"], c.mono_dir)
+            if not m.has_version_locally(c.mono_dir, m.latest_version) and m.download_links["mono"]:
+                self.root.after(0, lambda: self.update_status(c.t("dl_mono").format(m.latest_version)))
+                m.download_and_extract(m.download_links["mono"], c.mono_dir)
 
         except Exception as e:
             print(f"啟動檢查失敗: {e}")
@@ -312,13 +334,16 @@ class LauncherGUI:
         try:
             self.manager.fetch_latest_info()
             c = self.config
-            if not os.listdir(c.standard_dir) and self.manager.download_links["standard"]:
-                self.root.after(0, lambda: self.refresh_title(c.t("dl_std").format(self.manager.latest_version)))
-                self.manager.download_and_extract(self.manager.download_links["standard"], c.standard_dir)
+            m = self.manager
+            
+            # 手動更新同樣改為名稱檢查
+            if not m.has_version_locally(c.standard_dir, m.latest_version) and m.download_links["standard"]:
+                self.root.after(0, lambda: self.refresh_title(c.t("dl_std").format(m.latest_version)))
+                m.download_and_extract(m.download_links["standard"], c.standard_dir)
 
-            if not os.listdir(c.mono_dir) and self.manager.download_links["mono"]:
-                self.root.after(0, lambda: self.refresh_title(c.t("dl_mono").format(self.manager.latest_version)))
-                self.manager.download_and_extract(self.manager.download_links["mono"], c.mono_dir)
+            if not m.has_version_locally(c.mono_dir, m.latest_version) and m.download_links["mono"]:
+                self.root.after(0, lambda: self.refresh_title(c.t("dl_mono").format(m.latest_version)))
+                m.download_and_extract(m.download_links["mono"], c.mono_dir)
             
             self.root.after(0, lambda: messagebox.showinfo(c.t("msg_success_t"), c.t("msg_success_c")))
         except Exception as e:
